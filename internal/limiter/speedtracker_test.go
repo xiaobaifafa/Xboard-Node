@@ -129,6 +129,18 @@ func TestSpeedTracker_UpdatesExistingLimiterWhenLimitChanges(t *testing.T) {
 	if st.HasLimits() || st.LimitedUserCount() != 0 {
 		t.Fatalf("expected no active limits, got hasLimits=%v count=%d", st.HasLimits(), st.LimitedUserCount())
 	}
+
+	// Re-enabling creates a fresh limiter; the old unlimited pointer cannot
+	// accidentally carry a NaN token balance into the new finite rate.
+	l.UpdateUsers([]model.UserSpec{{ID: 1, UUID: "u1", SpeedLimit: 2}})
+	st.UpdateBuckets()
+	reenabled := st.GetLimiter("u1")
+	if reenabled == nil || reenabled == lim {
+		t.Fatal("expected a fresh limiter when re-enabling a removed speed cap")
+	}
+	if want := rate.Limit(2 * 1_000_000 / 8); reenabled.Limit() != want {
+		t.Fatalf("re-enabled rate = %v, want %v", reenabled.Limit(), want)
+	}
 }
 
 func TestSpeedTracker_UpdateBuckets_RemovesUsers(t *testing.T) {
