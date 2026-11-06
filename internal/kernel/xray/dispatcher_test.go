@@ -1,6 +1,7 @@
 package xray
 
 import (
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -11,7 +12,7 @@ import (
 
 func newTestDispatcher() *LimitDispatcher {
 	return &LimitDispatcher{
-		limitedIPs: make(map[string]map[string]int),
+		activeIPs: make(map[string]map[string]int),
 	}
 }
 
@@ -45,22 +46,22 @@ func TestLimitDispatcher_DeviceLimitCheck(t *testing.T) {
 	email1 := userEmail(1)
 
 	// First IP should be allowed
-	if ld.checkDeviceLimit(email1, "1.1.1.1", true) {
+	if ld.checkDeviceLimit(email1, "1.1.1.1") {
 		t.Error("first IP should be allowed")
 	}
 
 	// Second IP should be allowed (limit=2)
-	if ld.checkDeviceLimit(email1, "2.2.2.2", true) {
+	if ld.checkDeviceLimit(email1, "2.2.2.2") {
 		t.Error("second IP should be allowed")
 	}
 
 	// Third unique IP should be rejected
-	if !ld.checkDeviceLimit(email1, "3.3.3.3", true) {
+	if !ld.checkDeviceLimit(email1, "3.3.3.3") {
 		t.Error("third IP should be rejected (limit=2)")
 	}
 
 	// Same IP as first should be allowed (already connected)
-	if ld.checkDeviceLimit(email1, "1.1.1.1", true) {
+	if ld.checkDeviceLimit(email1, "1.1.1.1") {
 		t.Error("same IP should always be allowed")
 	}
 
@@ -68,7 +69,7 @@ func TestLimitDispatcher_DeviceLimitCheck(t *testing.T) {
 	email2 := userEmail(2)
 	for i := 0; i < 10; i++ {
 		ip := "10.0.0." + string(rune('0'+i))
-		if ld.checkDeviceLimit(email2, ip, true) {
+		if ld.checkDeviceLimit(email2, ip) {
 			t.Errorf("user with no device limit should always be allowed (ip=%s)", ip)
 		}
 	}
@@ -82,11 +83,11 @@ func TestLimitDispatcher_DelConn(t *testing.T) {
 	ld.UpdateLimits(map[string]int{email: 1}, deviceLimits, nil)
 
 	// Add 2 IPs
-	ld.checkDeviceLimit(email, "1.1.1.1", true)
-	ld.checkDeviceLimit(email, "2.2.2.2", true)
+	ld.checkDeviceLimit(email, "1.1.1.1")
+	ld.checkDeviceLimit(email, "2.2.2.2")
 
 	// Third should be rejected
-	if !ld.checkDeviceLimit(email, "3.3.3.3", true) {
+	if !ld.checkDeviceLimit(email, "3.3.3.3") {
 		t.Error("third IP should be rejected")
 	}
 
@@ -94,7 +95,7 @@ func TestLimitDispatcher_DelConn(t *testing.T) {
 	ld.delConn(email, "1.1.1.1")
 
 	// Now third IP should be allowed
-	if ld.checkDeviceLimit(email, "3.3.3.3", true) {
+	if ld.checkDeviceLimit(email, "3.3.3.3") {
 		t.Error("after deleting one IP, new IP should be allowed")
 	}
 }
@@ -105,26 +106,13 @@ func TestLimitDispatcher_GetConnectionState(t *testing.T) {
 	email1 := userEmail(1)
 	email2 := userEmail(2)
 	ld.UpdateLimits(map[string]int{email1: 1, email2: 2}, nil, nil)
-
-	ic1 := &ipCounter{}
-	r1 := &atomic.Int64{}
-	r1.Store(1)
-	ic1.ips.Store("1.1.1.1", r1)
-	r2 := &atomic.Int64{}
-	r2.Store(1)
-	ic1.ips.Store("2.2.2.2", r2)
-	ld.unlimitedIPs.Store(email1, ic1)
-
-	ic2 := &ipCounter{}
-	r3 := &atomic.Int64{}
-	r3.Store(1)
-	ic2.ips.Store("3.3.3.3", r3)
-	ld.unlimitedIPs.Store(email2, ic2)
-
+	ld.mu.Lock()
+	ld.activeIPs[email1] = map[string]int{"1.1.1.1": 2, "2.2.2.2": 1}
+	ld.activeIPs[email2] = map[string]int{"3.3.3.3": 1}
+	ld.mu.Unlock()
 	ld.connCount.Store(5)
 
 	aliveIPs, connCount := ld.GetConnectionState()
-
 	if connCount != 5 {
 		t.Errorf("expected connCount=5, got %d", connCount)
 	}
@@ -140,17 +128,17 @@ func TestLimitDispatcher_ResetConns(t *testing.T) {
 	ld := newTestDispatcher()
 
 	ld.mu.Lock()
-	ld.limitedIPs["user@1"] = map[string]int{"1.1.1.1": 1}
+	ld.activeIPs["user@1"] = map[string]int{"1.1.1.1": 1}
 	ld.mu.Unlock()
 	ld.connCount.Store(3)
 
 	ld.ResetConns()
 
 	ld.mu.RLock()
-	ipCount := len(ld.limitedIPs)
+	ipCount := len(ld.activeIPs)
 	ld.mu.RUnlock()
 	if ipCount != 0 {
-		t.Error("limitedIPs should be empty after reset")
+		t.Error("activeIPs should be empty after reset")
 	}
 
 	if ld.connCount.Load() != 0 {
@@ -158,34 +146,52 @@ func TestLimitDispatcher_ResetConns(t *testing.T) {
 	}
 }
 
-func TestLimitDispatcher_UnlimitedUserFastPath(t *testing.T) {
+func TestLimitDispatcher_UnlimitedUserIPTracking(t *testing.T) {
 	ld := newTestDispatcher()
-
 	email := userEmail(1)
-	// No device limit set for this user
 	ld.UpdateLimits(map[string]int{email: 1}, nil, nil)
 
-	// Should use fast path (sync.Map), no lock needed
-	for i := 0; i < 100; i++ {
-		ip := "10.0.0." + string(rune('0'+i%10))
-		if ld.checkDeviceLimit(email, ip, true) {
+	for i := 0; i < 10; i++ {
+		ip := "10.0.0." + string(rune('0'+i))
+		if ld.checkDeviceLimit(email, ip) {
 			t.Errorf("unlimited user should always be allowed (ip=%s)", ip)
 		}
 	}
 
-	// Verify IPs are tracked in unlimitedIPs
-	v, ok := ld.unlimitedIPs.Load(email)
-	if !ok {
-		t.Error("unlimited user should have entry in unlimitedIPs")
-	}
-	ic := v.(*ipCounter)
-	ips := ic.aliveIPs()
-	if len(ips) == 0 {
-		t.Error("should have tracked some IPs")
+	ld.mu.RLock()
+	defer ld.mu.RUnlock()
+	if got := len(ld.activeIPs[email]); got != 10 {
+		t.Fatalf("tracked active IPs = %d, want 10", got)
 	}
 }
 
+func TestLimitDispatcher_DeviceLimitConcurrentAdmissions(t *testing.T) {
+	ld := newTestDispatcher()
+	email := userEmail(1)
+	ld.UpdateLimits(map[string]int{email: 1}, map[string]int{email: 2}, nil)
 
+	var wg sync.WaitGroup
+	var accepted atomic.Int64
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ip := "192.0.2." + string(rune('A'+i))
+			if !ld.checkDeviceLimit(email, ip) {
+				accepted.Add(1)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if got := accepted.Load(); got != 2 {
+		t.Fatalf("concurrent accepted IPs = %d, want exactly 2", got)
+	}
+	ld.mu.RLock()
+	defer ld.mu.RUnlock()
+	if got := len(ld.activeIPs[email]); got != 2 {
+		t.Fatalf("active IP count = %d, want 2", got)
+	}
+}
 
 type interruptTestWriter struct {
 	buf.Writer
@@ -206,8 +212,8 @@ func TestLimitDispatcher_CloseUserConnectionsOnlyTargetsOneUser(t *testing.T) {
 	link1 := &transport.Link{Reader: nopReader{}, Writer: writer1}
 	link2 := &transport.Link{Reader: nopReader{}, Writer: writer2}
 
-	ld.trackLink(link1, user1, "1.1.1.1", true)
-	ld.trackLink(link2, user2, "2.2.2.2", true)
+	ld.trackLink(link1, user1, "1.1.1.1")
+	ld.trackLink(link2, user2, "2.2.2.2")
 	ld.CloseUserConnections(user1)
 
 	if !writer1.interrupted.Load() {
@@ -235,7 +241,7 @@ func TestLimitDispatcher_TrackLinkPreservesReader(t *testing.T) {
 	origWriter := &closeTrackingWriter{Writer: buf.Discard, onClose: func() {}}
 	link := &transport.Link{Reader: origReader, Writer: origWriter}
 
-	ld.trackLink(link, email, "1.1.1.1", true)
+	ld.trackLink(link, email, "1.1.1.1")
 
 	if link.Reader != origReader {
 		t.Fatal("trackLink must not replace link.Reader")
@@ -249,12 +255,12 @@ func TestLimitDispatcher_CloseTrackingWriterReleasesConn(t *testing.T) {
 	ld := newTestDispatcher()
 	email := userEmail(1)
 	ld.UpdateLimits(map[string]int{email: 1}, map[string]int{email: 1}, nil)
-	if ld.checkDeviceLimit(email, "1.1.1.1", true) {
+	if ld.checkDeviceLimit(email, "1.1.1.1") {
 		t.Fatal("first connection should be allowed")
 	}
 
 	link := &transport.Link{Reader: nopReader{}, Writer: buf.Discard}
-	ld.trackLink(link, email, "1.1.1.1", true)
+	ld.trackLink(link, email, "1.1.1.1")
 
 	if got := ld.connCount.Load(); got != 1 {
 		t.Fatalf("expected connCount=1 after tracking, got %d", got)
@@ -269,7 +275,7 @@ func TestLimitDispatcher_CloseTrackingWriterReleasesConn(t *testing.T) {
 	if got := ld.connCount.Load(); got != 0 {
 		t.Fatalf("expected connCount=0 after close, got %d", got)
 	}
-	if ld.checkDeviceLimit(email, "2.2.2.2", true) {
+	if ld.checkDeviceLimit(email, "2.2.2.2") {
 		t.Fatal("device slot should be released after writer close")
 	}
 }
