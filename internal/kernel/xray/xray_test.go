@@ -9,6 +9,8 @@ import (
 	"github.com/cedar2025/xboard-node/internal/config"
 	"github.com/cedar2025/xboard-node/internal/model"
 	appstats "github.com/xtls/xray-core/app/stats"
+	"github.com/xtls/xray-core/common/buf"
+	"github.com/xtls/xray-core/transport"
 	xrayCore "github.com/xtls/xray-core/core"
 	featurebandwidth "github.com/xtls/xray-core/features/bandwidth"
 	xraystats "github.com/xtls/xray-core/features/stats"
@@ -163,13 +165,39 @@ func TestXraySetSpeedLimitFuncUsesPatchedCorePath(t *testing.T) {
 }
 
 
+
+func TestXrayCloseUserConnectionsResolvesUUID(t *testing.T) {
+	ld := newTestDispatcher()
+	x := New(config.KernelConfig{Type: "xray"})
+	x.limitDispatcher = ld
+	x.users = []model.UserSpec{
+		{ID: 1, UUID: "uuid-1"},
+		{ID: 2, UUID: "uuid-2"},
+	}
+
+	writer1 := &interruptTestWriter{Writer: buf.Discard}
+	writer2 := &interruptTestWriter{Writer: buf.Discard}
+	ld.trackLink(&transport.Link{Reader: nopReader{}, Writer: writer1}, userEmail(1), "1.1.1.1", true)
+	ld.trackLink(&transport.Link{Reader: nopReader{}, Writer: writer2}, userEmail(2), "2.2.2.2", true)
+
+	if err := x.CloseUserConnections(context.Background(), "uuid-1"); err != nil {
+		t.Fatalf("CloseUserConnections() error = %v", err)
+	}
+	if !writer1.interrupted.Load() {
+		t.Fatal("expected UUID-matched user's session to be interrupted")
+	}
+	if writer2.interrupted.Load() {
+		t.Fatal("expected other user's session to remain active")
+	}
+}
+
 func TestXrayCapabilities(t *testing.T) {
 	x := New(config.KernelConfig{Type: "xray"})
 	caps := x.Capabilities()
 	if !caps.PerUserSpeedLimit || !caps.DeviceLimit || !caps.BuiltInTrafficStats || !caps.AliveIPTracking {
 		t.Fatalf("unexpected positive xray capabilities: %+v", caps)
 	}
-	if caps.ForceCloseConnection || caps.ForceCloseUser {
+	if caps.ForceCloseConnection || !caps.ForceCloseUser {
 		t.Fatalf("unexpected force-close xray capabilities: %+v", caps)
 	}
 }
