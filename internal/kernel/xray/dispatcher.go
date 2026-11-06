@@ -13,6 +13,9 @@ import (
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/session"
+	featurebandwidth "github.com/xtls/xray-core/features/bandwidth"
+	xrayCore "github.com/xtls/xray-core/core"
+	"golang.org/x/time/rate"
 	"github.com/xtls/xray-core/features/routing"
 	"github.com/xtls/xray-core/transport"
 
@@ -112,10 +115,19 @@ func (d *LimitDispatcher) DispatchLink(ctx context.Context, dest net.Destination
 		return err
 	}
 
-	// Wrap before delegation because the inner dispatcher may start consuming
-	// the link immediately. If delegation fails, close the wrapper to release
-	// the IP refcount and the underlying writer.
+	// DispatchLink is the VLESS-style path: Xray's WrapLink applies the
+	// download limiter to link.Writer, while this reader wrapper limits client
+	// upload. Both use the same per-user token bucket.
 	if email != "" {
+		reader, err := d.applyUploadSpeedLimit(ctx, email, link.Reader)
+		if err != nil {
+			d.delConn(email, sourceIP)
+			return err
+		}
+		link.Reader = reader
+
+		// Wrap before delegation because the inner dispatcher may start
+		// consuming the link immediately.
 		d.trackLink(link, email, sourceIP)
 	}
 	if err := d.innerDisp.DispatchLink(ctx, dest, link); err != nil {
@@ -145,6 +157,54 @@ func (d *LimitDispatcher) identifyAndCheck(ctx context.Context) (email, sourceIP
 		return "", "", errors.New("device limit exceeded for " + email)
 	}
 	return email, sourceIP, nil
+}
+
+// applyUploadSpeedLimit wraps the inbound reader on DispatchLink paths.
+// The default Xray dispatcher only wraps link.Writer here, so without this
+// reader wrapper client upload would remain unlimited.
+func (d *LimitDispatcher) applyUploadSpeedLimit(ctx context.Context, email string, reader buf.Reader) (buf.Reader, error) {
+	d.mu.RLock()
+	speedLimited := d.speedLimits[email] > 0
+	d.mu.RUnlock()
+	if !speedLimited {
+		return reader, nil
+	}
+
+	feat := xrayCore.MustFromContext(ctx).GetFeature(featurebandwidth.ManagerType())
+	if feat == nil {
+		return nil, errors.New("xray bandwidth manager unavailable for speed-limited user " + email)
+	}
+	manager, ok := feat.(featurebandwidth.Manager)
+	if !ok {
+		return nil, errors.New("xray bandwidth manager has unexpected type")
+	}
+	lim := manager.GetUserLimiter(email)
+	if lim == nil {
+		return nil, errors.New("xray user rate limiter unavailable for " + email)
+	}
+	return &rateLimitReader{Reader: reader, Limiter: lim, Context: ctx}, nil
+}
+
+type rateLimitReader struct {
+	buf.Reader
+	Limiter *rate.Limiter
+	Context context.Context
+}
+
+func (r *rateLimitReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
+	mb, err := r.Reader.ReadMultiBuffer()
+	if mb.IsEmpty() || r.Limiter == nil {
+		return mb, err
+	}
+	ctx := r.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if waitErr := r.Limiter.WaitN(ctx, mb.Len()); waitErr != nil {
+		buf.ReleaseMulti(mb)
+		return nil, waitErr
+	}
+	return mb, err
 }
 
 // enforceSpeedLimitPath disables XTLS Vision raw TCP splice for capped users.
