@@ -83,7 +83,7 @@ type LimitDispatcher struct {
 	connCount atomic.Int64 // total active connections tracked by dispatcher
 }
 
-ipCounter// ─── routing.Dispatcher ──────────────────────────────────────────────────────
+// ─── routing.Dispatcher ──────────────────────────────────────────────────────
 
 func (d *LimitDispatcher) Dispatch(ctx context.Context, dest net.Destination) (*transport.Link, error) {
 	email, sourceIP, err := d.identifyAndCheck(ctx)
@@ -237,7 +237,7 @@ func (d *LimitDispatcher) ResetConns() {
 	d.activeIPs = make(map[string]map[string]int)
 	d.mu.Unlock()
 
-reset unlimited	d.connMu.Lock()
+	d.connMu.Lock()
 	d.activeWriters = make(map[string]map[*closeTrackingWriter]struct{})
 	d.connMu.Unlock()
 
