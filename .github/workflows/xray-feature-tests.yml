@@ -25,6 +25,9 @@ jobs:
       - name: Download pinned Xray core fork
         run: go mod download github.com/xiaobaifafa/Xray-core
 
+      - name: Test Xray raw splice implementation
+        run: go test -race github.com/xtls/xray-core/proxy -run 'TestCopyRawConnWithSplice' -count=1 -v
+
       - name: Run tests
         run: make test
 
