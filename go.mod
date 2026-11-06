@@ -263,4 +263,4 @@ require (
 
 replace github.com/sagernet/sing-box => github.com/cedar2025/sing-box v1.14.0-alpha.2.0.20260316103356-2e665cb7e295
 
-replace github.com/xtls/xray-core => github.com/xiaobaifafa/Xray-core v0.0.0-20261106224217-8c7cb249e282
+replace github.com/xtls/xray-core => github.com/xiaobaifafa/Xray-core v0.0.0-20261106224324-f0e2a7a3e69a
