@@ -46,7 +46,7 @@ func (t *SpeedTracker) SetLogCallback(f SpeedTrackerLogCallback) {
 }
 
 // UpdateBuckets updates UUID mappings and mutates existing limiters in place.
-// A limiter being removed is first changed to infinite rate because existing
+// A limiter being removed is first changed to a very high finite rate because existing
 // Xray RateLimitWriter/Reader wrappers may still hold its pointer.
 func (t *SpeedTracker) UpdateBuckets() {
 	currentUsers := make([]model.UserSpec, 0, 32)
