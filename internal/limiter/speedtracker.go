@@ -8,7 +8,10 @@ import (
 	"golang.org/x/time/rate"
 )
 
-const unlimitedBurst = int(^uint(0) >> 1)
+const (
+	unlimitedBurst = int(^uint(0) >> 1)
+	unlimitedRate  = rate.Limit(1e30)
+)
 
 // SpeedTracker maintains one shared token bucket per speed-limited user.
 // Existing buckets are updated in place so active Xray sessions immediately
@@ -65,7 +68,7 @@ func (t *SpeedTracker) UpdateBuckets() {
 
 		if user.SpeedLimit <= 0 {
 			if lim := t.buckets[user.ID]; lim != nil {
-				lim.SetLimit(rate.Inf)
+				lim.SetLimit(unlimitedRate)
 				lim.SetBurst(unlimitedBurst)
 				delete(t.buckets, user.ID)
 			}
