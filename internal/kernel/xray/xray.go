@@ -279,10 +279,20 @@ func (x *Xray) closeRemovedUserConnections(users []model.UserSpec) {
 	ld := x.limitDispatcher
 	x.mu.Unlock()
 	if ld == nil {
+		nlog.Core().Warn("xray: cannot force-close removed users: dispatcher unavailable",
+			"users", len(users),
+		)
 		return
 	}
 	for _, user := range users {
-		ld.CloseUserConnections(userEmail(user.ID))
+		email := userEmail(user.ID)
+		matched := ld.CloseUserConnections(email)
+		nlog.Core().Info("xray: removed-user connection cleanup",
+			"user_id", user.ID,
+			"user_uuid", user.UUID,
+			"email", email,
+			"matched_connections", matched,
+		)
 	}
 }
 
@@ -439,11 +449,26 @@ func (x *Xray) RemoveUsers(users []model.UserSpec) (int, error) {
 	actualRemoved := 0
 	for _, u := range users {
 		email := userEmail(u.ID)
+		nlog.Core().Info("xray: removing inbound user",
+			"user_id", u.ID,
+			"user_uuid", u.UUID,
+			"email", email,
+		)
 		if err := um.RemoveUser(ctx, email); err != nil {
-			nlog.Core().Debug("xray: RemoveUser skipped", "user", u.ID, "error", err)
+			nlog.Core().Warn("xray: RemoveUser failed",
+				"user_id", u.ID,
+				"user_uuid", u.UUID,
+				"email", email,
+				"error", err,
+			)
 			continue
 		}
 		actualRemoved++
+		nlog.Core().Info("xray: inbound user removed",
+			"user_id", u.ID,
+			"user_uuid", u.UUID,
+			"email", email,
+		)
 	}
 
 	x.mu.Lock()
@@ -497,12 +522,28 @@ func (x *Xray) UpdateUsers(users []model.UserSpec) (added, removed int, err erro
 
 	ctx := context.Background()
 
-	// Remove first, then add (order matters for UUID changes on same ID)
+	// Remove first, then add (order matters for UUID changes on same ID).
 	for _, u := range toRemove {
 		email := userEmail(u.ID)
+		nlog.Core().Info("xray: UpdateUsers removing inbound user",
+			"user_id", u.ID,
+			"user_uuid", u.UUID,
+			"email", email,
+		)
 		if err := um.RemoveUser(ctx, email); err != nil {
-			nlog.Core().Debug("xray: RemoveUser skipped in UpdateUsers", "user", u.ID, "error", err)
+			nlog.Core().Warn("xray: RemoveUser failed in UpdateUsers",
+				"user_id", u.ID,
+				"user_uuid", u.UUID,
+				"email", email,
+				"error", err,
+			)
+			continue
 		}
+		nlog.Core().Info("xray: UpdateUsers inbound user removed",
+			"user_id", u.ID,
+			"user_uuid", u.UUID,
+			"email", email,
+		)
 	}
 	for _, u := range toAdd {
 		mu, err := toMemoryUser(proto, nc, u)
@@ -520,9 +561,16 @@ func (x *Xray) UpdateUsers(users []model.UserSpec) (added, removed int, err erro
 	x.mu.Unlock()
 	x.updateDispatcherLimits(users)
 	x.updateBandwidthLimits(users)
+	nlog.Core().Info("xray: UpdateUsers dispatching connection cleanup",
+		"removed_users", len(toRemove),
+	)
 	x.closeRemovedUserConnections(toRemove)
 
-	nlog.Core().Info("xray: users updated via UserManager", "added", added, "removed", removed, "total", len(users))
+	nlog.Core().Info("xray: users updated via UserManager",
+		"added", added,
+		"removed", removed,
+		"total", len(users),
+	)
 	return
 }
 
