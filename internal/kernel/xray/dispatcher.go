@@ -80,6 +80,11 @@ type LimitDispatcher struct {
 	// Each entry is *ipCounter{ips sync.Map}.
 	unlimitedIPs sync.Map // email → *ipCounter
 
+	// activeWriters tracks the writable pipe endpoint for each user's sessions.
+	// Interrupting these writers closes only that user's Xray pipe sessions.
+	connMu       sync.Mutex
+	activeWriters map[string]map[*closeTrackingWriter]struct{}
+
 	connCount atomic.Int64 // total active connections tracked by dispatcher
 }
 
@@ -159,16 +164,49 @@ func (d *LimitDispatcher) identifyAndCheck(ctx context.Context, dest net.Destina
 func (d *LimitDispatcher) trackLink(link *transport.Link, email, sourceIP string, isTCP bool) {
 	d.connCount.Add(1)
 
-	onClose := func() {
+	writer := &closeTrackingWriter{Writer: link.Writer}
+	writer.onClose = func() {
+		d.connMu.Lock()
+		if writers := d.activeWriters[email]; writers != nil {
+			delete(writers, writer)
+			if len(writers) == 0 {
+				delete(d.activeWriters, email)
+			}
+		}
+		d.connMu.Unlock()
+
 		if isTCP {
 			d.delConn(email, sourceIP)
 		}
 		d.connCount.Add(-1)
 	}
 
-	link.Writer = &closeTrackingWriter{
-		Writer:  link.Writer,
-		onClose: onClose,
+	d.connMu.Lock()
+	if d.activeWriters == nil {
+		d.activeWriters = make(map[string]map[*closeTrackingWriter]struct{})
+	}
+	if d.activeWriters[email] == nil {
+		d.activeWriters[email] = make(map[*closeTrackingWriter]struct{})
+	}
+	d.activeWriters[email][writer] = struct{}{}
+	d.connMu.Unlock()
+
+	link.Writer = writer
+}
+
+// CloseUserConnections interrupts every tracked Xray pipe writer for one user.
+// The snapshot is taken under lock; Interrupt is called after releasing it
+// because the close callback removes the writer from activeWriters.
+func (d *LimitDispatcher) CloseUserConnections(email string) {
+	d.connMu.Lock()
+	writers := make([]*closeTrackingWriter, 0, len(d.activeWriters[email]))
+	for writer := range d.activeWriters[email] {
+		writers = append(writers, writer)
+	}
+	d.connMu.Unlock()
+
+	for _, writer := range writers {
+		writer.Interrupt()
 	}
 }
 
@@ -210,6 +248,10 @@ func (d *LimitDispatcher) ResetConns() {
 		d.unlimitedIPs.Delete(key)
 		return true
 	})
+
+	d.connMu.Lock()
+	d.activeWriters = make(map[string]map[*closeTrackingWriter]struct{})
+	d.connMu.Unlock()
 
 	d.connCount.Store(0)
 }
