@@ -59,12 +59,11 @@ func limitDispatcherFactory(ctx context.Context, config interface{}) (interface{
 }
 
 // LimitDispatcher wraps xray's DefaultDispatcher to enforce per-user
-// admission checks before a request is dispatched into xray-core.
+// admission checks and track each dispatched session by its authenticated user.
 //
-// It intentionally does NOT mutate transport.Link.Reader/Writer. Xray's
-// mux/XUDP close path requires the original concrete *pipe.Reader to remain
-// intact, so the dispatcher is limited to gate-keeping and safe connection
-// lifecycle bookkeeping.
+// trackLink preserves the original Reader (required by mux/XUDP) and wraps only
+// the Writer with a buf.Writer-compatible lifecycle hook. Interrupting that
+// writer interrupts its paired Xray pipe without touching other user sessions.
 type LimitDispatcher struct {
 	inner     interface{}        // original DefaultDispatcher (Feature + Dispatcher)
 	innerDisp routing.Dispatcher // same object, typed as Dispatcher
