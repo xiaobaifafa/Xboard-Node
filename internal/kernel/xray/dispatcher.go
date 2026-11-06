@@ -138,21 +138,28 @@ func (d *LimitDispatcher) identifyAndCheck(ctx context.Context) (email, sourceIP
 	email = si.User.Email
 	sourceIP = si.Source.Address.IP().String()
 
-	// XTLS Vision can bypass dispatcher writers through raw TCP splice. When
-	// this user has a speed cap, force the buffered copy path so RateLimitWriter
-	// is actually used for the payload.
-	d.mu.RLock()
-	speedLimited := d.speedLimits[email] > 0
-	d.mu.RUnlock()
-	if speedLimited {
-		si.CanSpliceCopy = 3
-	}
+	d.enforceSpeedLimitPath(si)
 
 	if d.checkDeviceLimit(email, sourceIP) {
 		nlog.Core().Debug("xray: device limit exceeded", "email", email, "ip", sourceIP)
 		return "", "", errors.New("device limit exceeded for " + email)
 	}
 	return email, sourceIP, nil
+}
+
+// enforceSpeedLimitPath disables XTLS Vision raw TCP splice for capped users.
+// Splice copies bytes directly between sockets and bypasses the dispatcher
+// Writer chain where RateLimitWriter is installed.
+func (d *LimitDispatcher) enforceSpeedLimitPath(inbound *session.Inbound) {
+	if inbound == nil || inbound.User == nil || inbound.User.Email == "" {
+		return
+	}
+	d.mu.RLock()
+	speedLimited := d.speedLimits[inbound.User.Email] > 0
+	d.mu.RUnlock()
+	if speedLimited {
+		inbound.CanSpliceCopy = 3
+	}
 }
 
 // trackLink records connection lifecycle without mutating xray-core owned
