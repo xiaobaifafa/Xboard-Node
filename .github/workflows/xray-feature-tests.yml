@@ -5,6 +5,10 @@ on:
     branches:
       - fix/close-user-connections-on-quota
 
+concurrency:
+  group: xray-feature-tests-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Go tests and Linux build
