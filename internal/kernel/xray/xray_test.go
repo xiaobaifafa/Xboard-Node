@@ -182,8 +182,8 @@ func TestXrayCloseUserConnectionsResolvesUUID(t *testing.T) {
 
 	writer1 := &interruptTestWriter{Writer: buf.Discard}
 	writer2 := &interruptTestWriter{Writer: buf.Discard}
-	ld.trackLink(&transport.Link{Reader: nopReader{}, Writer: writer1}, userEmail(1), "1.1.1.1", true)
-	ld.trackLink(&transport.Link{Reader: nopReader{}, Writer: writer2}, userEmail(2), "2.2.2.2", true)
+	ld.trackLink(&transport.Link{Reader: nopReader{}, Writer: writer1}, userEmail(1), "1.1.1.1")
+	ld.trackLink(&transport.Link{Reader: nopReader{}, Writer: writer2}, userEmail(2), "2.2.2.2")
 
 	if err := x.CloseUserConnections(context.Background(), "uuid-1"); err != nil {
 		t.Fatalf("CloseUserConnections() error = %v", err)
