@@ -123,7 +123,7 @@ func TestSpeedTracker_UpdatesExistingLimiterWhenLimitChanges(t *testing.T) {
 	if st.GetLimiter("u1") != nil {
 		t.Fatal("expected no limiter after removing speed cap")
 	}
-	if lim.Limit() != rate.Inf {
+	if lim.Limit() != rate.Limit(1e30) {
 		t.Fatalf("removed limit left old rate %v", lim.Limit())
 	}
 	if st.HasLimits() || st.LimitedUserCount() != 0 {
@@ -160,7 +160,7 @@ func TestSpeedTracker_UpdateBuckets_RemovesUsers(t *testing.T) {
 	if st.GetLimiter("u2") != nil {
 		t.Error("expected no bucket for removed user 2")
 	}
-	if removedLimiter.Limit() != rate.Inf {
+	if removedLimiter.Limit() != rate.Limit(1e30) {
 		t.Errorf("removed user's existing limiter should be disabled, got %v", removedLimiter.Limit())
 	}
 }
