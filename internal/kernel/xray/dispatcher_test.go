@@ -1,15 +1,19 @@
 package xray
 
 import (
+	"context"
+	"io"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/cedar2025/xboard-node/internal/model"
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/transport"
+	"golang.org/x/time/rate"
 )
 
 func newTestDispatcher() *LimitDispatcher {
@@ -21,6 +25,45 @@ func newTestDispatcher() *LimitDispatcher {
 type nopReader struct{}
 
 func (nopReader) ReadMultiBuffer() (buf.MultiBuffer, error) { return nil, nil }
+
+type sequenceBufferReader struct {
+	reads int
+}
+
+func (r *sequenceBufferReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
+	if r.reads >= 2 {
+		return nil, io.EOF
+	}
+	b := buf.NewWithSize(1)
+	_, _ = b.Write([]byte{byte('a' + r.reads)})
+	r.reads++
+	return buf.MultiBuffer{b}, nil
+}
+
+func TestRateLimitReaderThrottlesInboundPayload(t *testing.T) {
+	reader := &rateLimitReader{
+		Reader:  &sequenceBufferReader{},
+		Limiter: rate.NewLimiter(rate.Limit(5), 1),
+		Context: context.Background(),
+	}
+
+	first, err := reader.ReadMultiBuffer()
+	if err != nil {
+		t.Fatalf("first ReadMultiBuffer() error = %v", err)
+	}
+	buf.ReleaseMulti(first)
+
+	start := time.Now()
+	second, err := reader.ReadMultiBuffer()
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("second ReadMultiBuffer() error = %v", err)
+	}
+	buf.ReleaseMulti(second)
+	if elapsed < 150*time.Millisecond {
+		t.Fatalf("second read waited only %v; expected token-bucket throttling", elapsed)
+	}
+}
 
 func TestLimitDispatcher_DeviceLimitCheck(t *testing.T) {
 	ld := newTestDispatcher()
