@@ -907,7 +907,11 @@ func applyBandwidthLimits(inst *xrayCore.Instance, users []model.UserSpec, fn fu
 	for _, user := range users {
 		email := userEmail(user.ID)
 		if fn != nil {
-			bm.SetUserLimiter(email, fn(user.UUID))
+			lim := fn(user.UUID)
+			if user.SpeedLimit > 0 && lim == nil {
+				return fmt.Errorf("speed limiter is missing for user %d", user.ID)
+			}
+			bm.SetUserLimiter(email, lim)
 			continue
 		}
 		bps := int64(user.SpeedLimit) * 1_000_000 / 8
