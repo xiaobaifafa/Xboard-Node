@@ -196,7 +196,7 @@ func (d *LimitDispatcher) trackLink(link *transport.Link, email, sourceIP string
 // CloseUserConnections interrupts every tracked Xray pipe writer for one user.
 // The snapshot is taken under lock; Interrupt is called after releasing it
 // because the close callback removes the writer from activeWriters.
-func (d *LimitDispatcher) CloseUserConnections(email string) {
+func (d *LimitDispatcher) CloseUserConnections(email string) int {
 	d.connMu.Lock()
 	writers := make([]*closeTrackingWriter, 0, len(d.activeWriters[email]))
 	for writer := range d.activeWriters[email] {
@@ -204,9 +204,22 @@ func (d *LimitDispatcher) CloseUserConnections(email string) {
 	}
 	d.connMu.Unlock()
 
+	nlog.Core().Info("xray: force-close requested",
+		"email", email,
+		"matched_connections", len(writers),
+	)
+
+	interrupted := 0
 	for _, writer := range writers {
 		writer.Interrupt()
+		interrupted++
 	}
+
+	nlog.Core().Info("xray: force-close interrupt dispatched",
+		"email", email,
+		"interrupted_connections", interrupted,
+	)
+	return interrupted
 }
 
 // ─── features.Feature (delegated) ───────────────────────────────────────────
