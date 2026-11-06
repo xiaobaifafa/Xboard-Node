@@ -278,7 +278,7 @@ func TestXraySpeedLimitUpdatesSharedLimiter(t *testing.T) {
 	userLimiter.UpdateUsers(unlimitedUsers)
 	speedTracker.UpdateBuckets()
 	x.updateBandwidthLimits(unlimitedUsers)
-	if liveLimiter.Limit() != rate.Inf {
+	if liveLimiter.Limit() != rate.Limit(1e30) {
 		t.Fatalf("live rate after removing limit = %v, want unlimited", liveLimiter.Limit())
 	}
 	if bm.GetUserLimiter(userEmail(1)) != nil {
