@@ -224,7 +224,7 @@ func (r *rateLimitReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if waitErr := r.Limiter.WaitN(ctx, mb.Len()); waitErr != nil {
+	if waitErr := r.Limiter.WaitN(ctx, int(mb.Len())); waitErr != nil {
 		buf.ReleaseMulti(mb)
 		return nil, waitErr
 	}
