@@ -272,6 +272,20 @@ func (x *Xray) CloseUserConnections(_ context.Context, userUUID string) error {
 	return nil
 }
 
+// closeRemovedUserConnections terminates existing sessions after Xray has
+// removed the corresponding users from its inbound validator.
+func (x *Xray) closeRemovedUserConnections(users []model.UserSpec) {
+	x.mu.Lock()
+	ld := x.limitDispatcher
+	x.mu.Unlock()
+	if ld == nil {
+		return
+	}
+	for _, user := range users {
+		ld.CloseUserConnections(userEmail(user.ID))
+	}
+}
+
 // SetSpeedLimitFunc wires xray's patched bandwidth feature to the shared
 // per-user limiter callback used by the service layer. Unlike the old no-op
 // behavior, xray now consumes this callback to support dynamic speed updates.
@@ -437,6 +451,7 @@ func (x *Xray) RemoveUsers(users []model.UserSpec) (int, error) {
 	x.mu.Unlock()
 	x.updateDispatcherLimits(kept)
 	x.updateBandwidthLimits(kept)
+	x.closeRemovedUserConnections(users)
 
 	nlog.Core().Info("xray: users removed via UserManager", "removed", actualRemoved, "total", len(kept))
 	return actualRemoved, nil
@@ -505,6 +520,7 @@ func (x *Xray) UpdateUsers(users []model.UserSpec) (added, removed int, err erro
 	x.mu.Unlock()
 	x.updateDispatcherLimits(users)
 	x.updateBandwidthLimits(users)
+	x.closeRemovedUserConnections(toRemove)
 
 	nlog.Core().Info("xray: users updated via UserManager", "added", added, "removed", removed, "total", len(users))
 	return
