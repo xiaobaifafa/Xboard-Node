@@ -231,9 +231,9 @@ func TestNewlyLimitedUsersDetectsUnlimitedToLimitedTransitions(t *testing.T) {
 	}
 }
 
-func TestXraySpeedLimitUpdatesExistingSessionLimiter(t *testing.T) {
+func TestXraySpeedLimitUpdatesSharedLimiter(t *testing.T) {
 	users := []model.UserSpec{
-		{ID: 1, UUID: "uuid-1", SpeedLimit: 0},
+		{ID: 1, UUID: "uuid-1", SpeedLimit: 4},
 		{ID: 2, UUID: "uuid-2", SpeedLimit: 0},
 	}
 	userLimiter := limiter.New()
@@ -252,35 +252,42 @@ func TestXraySpeedLimitUpdatesExistingSessionLimiter(t *testing.T) {
 	x.users = users
 	x.SetSpeedLimitFunc(speedTracker.GetLimiter)
 
-	// Xray must attach a stable limiter even while the user is unlimited.
 	liveLimiter := bm.GetUserLimiter(userEmail(1))
-	if liveLimiter == nil || liveLimiter.Limit() != rate.Inf {
-		t.Fatal("expected unlimited user to have an infinite-rate Xray limiter")
+	if liveLimiter == nil {
+		t.Fatal("expected Xray manager to receive the speed-limited user's limiter")
+	}
+	if bm.GetUserLimiter(userEmail(2)) != nil {
+		t.Fatal("unlimited user should not receive a rate-limiter wrapper")
 	}
 
-	// Existing writers keep this pointer, so toggling the limit must update it.
+	// Positive-to-positive changes mutate the same pointer held by active writers.
 	updatedUsers := []model.UserSpec{
-		{ID: 1, UUID: "uuid-1", SpeedLimit: 4},
+		{ID: 1, UUID: "uuid-1", SpeedLimit: 8},
 		{ID: 2, UUID: "uuid-2", SpeedLimit: 0},
 	}
 	userLimiter.UpdateUsers(updatedUsers)
 	speedTracker.UpdateBuckets()
+	x.updateBandwidthLimits(updatedUsers)
 	if bm.GetUserLimiter(userEmail(1)) != liveLimiter {
 		t.Fatal("Xray manager replaced the live limiter pointer")
 	}
-	if want := rate.Limit(4 * 1_000_000 / 8); liveLimiter.Limit() != want {
-		t.Fatalf("live rate after enabling limit = %v, want %v", liveLimiter.Limit(), want)
+	if want := rate.Limit(8 * 1_000_000 / 8); liveLimiter.Limit() != want {
+		t.Fatalf("live rate after update = %v, want %v", liveLimiter.Limit(), want)
 	}
 
-	// Removing the limit must release existing connections without reconnecting.
+	// Removing the limit disables the old pointer before Xray drops its entry.
 	unlimitedUsers := []model.UserSpec{
 		{ID: 1, UUID: "uuid-1", SpeedLimit: 0},
 		{ID: 2, UUID: "uuid-2", SpeedLimit: 0},
 	}
 	userLimiter.UpdateUsers(unlimitedUsers)
 	speedTracker.UpdateBuckets()
+	x.updateBandwidthLimits(unlimitedUsers)
 	if liveLimiter.Limit() != rate.Inf {
 		t.Fatalf("live rate after removing limit = %v, want unlimited", liveLimiter.Limit())
+	}
+	if bm.GetUserLimiter(userEmail(1)) != nil {
+		t.Fatal("Xray manager should remove limiter for unlimited user")
 	}
 }
 
