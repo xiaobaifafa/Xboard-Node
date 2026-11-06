@@ -7,6 +7,8 @@ import (
 
 	"github.com/cedar2025/xboard-node/internal/model"
 	"github.com/xtls/xray-core/common/buf"
+	"github.com/xtls/xray-core/common/protocol"
+	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/transport"
 )
 
@@ -72,6 +74,34 @@ func TestLimitDispatcher_DeviceLimitCheck(t *testing.T) {
 		if ld.checkDeviceLimit(email2, ip) {
 			t.Errorf("user with no device limit should always be allowed (ip=%s)", ip)
 		}
+	}
+}
+
+func TestLimitDispatcher_DisablesVisionSpliceForSpeedLimitedUsers(t *testing.T) {
+	ld := newTestDispatcher()
+	email := userEmail(1)
+	ld.UpdateLimits(
+		map[string]int{email: 1},
+		nil,
+		map[string]int{email: 8},
+	)
+
+	inbound := &session.Inbound{
+		User:          &protocol.MemoryUser{Email: email},
+		CanSpliceCopy: 1,
+	}
+	ld.enforceSpeedLimitPath(inbound)
+	if inbound.CanSpliceCopy != 3 {
+		t.Fatalf("speed-limited Vision inbound CanSpliceCopy = %d, want 3", inbound.CanSpliceCopy)
+	}
+
+	unlimited := &session.Inbound{
+		User:          &protocol.MemoryUser{Email: userEmail(2)},
+		CanSpliceCopy: 1,
+	}
+	ld.enforceSpeedLimitPath(unlimited)
+	if unlimited.CanSpliceCopy != 1 {
+		t.Fatalf("unlimited inbound CanSpliceCopy = %d, want unchanged 1", unlimited.CanSpliceCopy)
 	}
 }
 
