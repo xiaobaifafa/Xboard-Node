@@ -90,7 +90,7 @@ func (x *Xray) Capabilities() kernel.Capabilities {
 		BuiltInTrafficStats:  true,
 		AliveIPTracking:      true,
 		ForceCloseConnection: false,
-		ForceCloseUser:       false,
+		ForceCloseUser:       true,
 	}
 }
 
@@ -250,8 +250,25 @@ func (x *Xray) CloseConnection(_ context.Context, _ string) error {
 	return nil
 }
 
-func (x *Xray) CloseUserConnections(_ context.Context, _ string) error {
-	// No-op: handled by RemoveUsers at the xray core level.
+func (x *Xray) CloseUserConnections(_ context.Context, userUUID string) error {
+	x.mu.Lock()
+	var email string
+	for _, user := range x.users {
+		if user.UUID == userUUID {
+			email = userEmail(user.ID)
+			break
+		}
+	}
+	ld := x.limitDispatcher
+	x.mu.Unlock()
+
+	if email == "" {
+		return fmt.Errorf("xray user %q is not registered", userUUID)
+	}
+	if ld == nil {
+		return fmt.Errorf("xray limit dispatcher is unavailable")
+	}
+	ld.CloseUserConnections(email)
 	return nil
 }
 
