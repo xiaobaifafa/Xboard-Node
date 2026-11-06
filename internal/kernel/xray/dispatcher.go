@@ -13,11 +13,11 @@ import (
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/session"
-	featurebandwidth "github.com/xtls/xray-core/features/bandwidth"
 	xrayCore "github.com/xtls/xray-core/core"
-	"golang.org/x/time/rate"
+	featurebandwidth "github.com/xtls/xray-core/features/bandwidth"
 	"github.com/xtls/xray-core/features/routing"
 	"github.com/xtls/xray-core/transport"
+	"golang.org/x/time/rate"
 
 	"github.com/cedar2025/xboard-node/internal/nlog"
 )
