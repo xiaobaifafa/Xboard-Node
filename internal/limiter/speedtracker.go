@@ -8,26 +8,25 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// SpeedTrackerLogCallback is called when bucket updates occur.
-type SpeedTrackerLogCallback func(msg string)
+const unlimitedBurst = int(^uint(0) >> 1)
 
-// SpeedTracker manages per-user token-bucket rate limiters.
-// It does NOT wrap connections itself — instead, ConnTracker consults it
-// via GetLimiter to embed rate limiting in the same tracked connection
-// wrapper that does byte counting.
+// SpeedTracker maintains one shared rate.Limiter per user. Unlimited users
+// also receive an infinite-rate limiter so Xray wraps their sessions from the
+// start; changing a user from unlimited to limited then affects existing
+// connections without requiring a reconnect.
 type SpeedTracker struct {
 	limiter *Limiter
 	mu      sync.RWMutex
-	buckets map[int]*rate.Limiter // userID → shared rate limiter
+	buckets map[int]*rate.Limiter // userID → shared limiter, including unlimited users
 	uuidMap map[string]int        // UUID → userID
 
-	// Fast-path: when no users have a speed limit, GetLimiter returns nil
-	// immediately without any map lookup.
-	hasLimits atomic.Bool
-
-	// Optional callback for logging
-	logFunc SpeedTrackerLogCallback
+	hasLimits    atomic.Bool
+	limitedUsers int // protected by mu
+	logFunc      SpeedTrackerLogCallback
 }
+
+// SpeedTrackerLogCallback is called when bucket updates occur.
+type SpeedTrackerLogCallback func(msg string)
 
 // NewSpeedTracker creates a bucket manager for per-user bandwidth throttling.
 func NewSpeedTracker(l *Limiter) *SpeedTracker {
@@ -43,7 +42,9 @@ func (t *SpeedTracker) SetLogCallback(f SpeedTrackerLogCallback) {
 	t.logFunc = f
 }
 
-// UpdateBuckets updates the UUID→userID mapping and syncs existing limiters.
+// UpdateBuckets updates each user's limiter in place. Existing Xray writers
+// retain the same limiter pointer, so speed changes (including removing a
+// limit) immediately affect already-established sessions.
 func (t *SpeedTracker) UpdateBuckets() {
 	currentUsers := make([]model.UserSpec, 0, 32)
 	t.limiter.mu.RLock()
@@ -52,102 +53,74 @@ func (t *SpeedTracker) UpdateBuckets() {
 	}
 	t.limiter.mu.RUnlock()
 
-	func() {
-		t.mu.Lock()
-		defer t.mu.Unlock()
+	t.mu.Lock()
+	newUUIDMap := make(map[string]int, len(currentUsers))
+	activeIDs := make(map[int]struct{}, len(currentUsers))
+	limitedUsers := 0
 
-		newUUIDMap := make(map[string]int, len(currentUsers))
-		activeIDs := make(map[int]struct{}, len(currentUsers))
-
-		for _, user := range currentUsers {
-			activeIDs[user.ID] = struct{}{}
-			if user.UUID != "" {
-				newUUIDMap[user.UUID] = user.ID
-			}
-
-			// Update existing limiter if speed changed
-			if lim, ok := t.buckets[user.ID]; ok {
-				if user.SpeedLimit > 0 {
-					bytesPerSec := int(user.SpeedLimit) * 1_000_000 / 8
-					burst := bytesPerSec
-					if burst < 64*1024 {
-						burst = 64 * 1024
-					}
-					lim.SetLimit(rate.Limit(bytesPerSec))
-					lim.SetBurst(burst)
-				} else {
-					delete(t.buckets, user.ID)
-				}
-			}
+	for _, user := range currentUsers {
+		activeIDs[user.ID] = struct{}{}
+		if user.UUID != "" {
+			newUUIDMap[user.UUID] = user.ID
 		}
 
-		// Clean up buckets for removed users
-		for id := range t.buckets {
-			if _, ok := activeIDs[id]; !ok {
-				delete(t.buckets, id)
-			}
+		lim := t.buckets[user.ID]
+		if lim == nil {
+			// Install a limiter even for unlimited users. Xray attaches this
+			// pointer to the session writer once; later updates are in-place.
+			lim = rate.NewLimiter(rate.Inf, unlimitedBurst)
+			t.buckets[user.ID] = lim
 		}
 
-		t.uuidMap = newUUIDMap
-		t.hasLimits.Store(len(t.buckets) > 0)
-	}()
+		if user.SpeedLimit > 0 {
+			bytesPerSec := int(user.SpeedLimit) * 1_000_000 / 8
+			burst := bytesPerSec
+			if burst < 64*1024 {
+				burst = 64 * 1024
+			}
+			lim.SetLimit(rate.Limit(bytesPerSec))
+			lim.SetBurst(burst)
+			limitedUsers++
+		} else {
+			lim.SetLimit(rate.Inf)
+			lim.SetBurst(unlimitedBurst)
+		}
+	}
+
+	// Retire removed users' limiters. Existing writers may still hold these
+	// pointers briefly, so make them unlimited before dropping the map entry.
+	for id, lim := range t.buckets {
+		if _, ok := activeIDs[id]; !ok {
+			lim.SetLimit(rate.Inf)
+			lim.SetBurst(unlimitedBurst)
+			delete(t.buckets, id)
+		}
+	}
+
+	t.uuidMap = newUUIDMap
+	t.limitedUsers = limitedUsers
+	t.hasLimits.Store(limitedUsers > 0)
+	t.mu.Unlock()
 
 	if t.logFunc != nil {
 		t.logFunc("buckets updated")
 	}
 }
 
-// GetLimiter returns the rate limiter for the given user UUID, or nil if
-// no limit applies. Creates limiter on-demand if not exists.
-// Thread-safe.
+// GetLimiter returns the stable per-user limiter used by Xray. It returns nil
+// only when the UUID is not part of the current user snapshot.
 func (t *SpeedTracker) GetLimiter(user string) *rate.Limiter {
 	t.mu.RLock()
+	defer t.mu.RUnlock()
+
 	uid, exists := t.uuidMap[user]
 	if !exists {
-		t.mu.RUnlock()
 		return nil
 	}
-	if lim, ok := t.buckets[uid]; ok {
-		t.mu.RUnlock()
-		return lim
-	}
-	t.mu.RUnlock()
-
-	// Get user info from limiter
-	t.limiter.mu.RLock()
-	u, userExists := t.limiter.users[uid]
-	t.limiter.mu.RUnlock()
-
-	if !userExists || u.SpeedLimit <= 0 {
-		return nil
-	}
-
-	// Create limiter on-demand
-	bytesPerSec := int(u.SpeedLimit) * 1_000_000 / 8
-	burst := bytesPerSec
-	if burst < 64*1024 {
-		burst = 64 * 1024
-	}
-	if cap4s := bytesPerSec * 4; cap4s > 64*1024 && burst > cap4s {
-		burst = cap4s
-	}
-
-	lim := rate.NewLimiter(rate.Limit(bytesPerSec), burst)
-
-	t.mu.Lock()
-	// Double-check after acquiring write lock
-	if existing, ok := t.buckets[uid]; ok {
-		t.mu.Unlock()
-		return existing
-	}
-	t.buckets[uid] = lim
-	t.hasLimits.Store(true)
-	t.mu.Unlock()
-
-	return lim
+	return t.buckets[uid]
 }
 
-// HasLimits returns true if any user currently has a speed limit configured.
+// HasLimits reports whether any user currently has a positive speed limit.
 func (t *SpeedTracker) HasLimits() bool {
 	return t.hasLimits.Load()
 }
@@ -156,5 +129,5 @@ func (t *SpeedTracker) HasLimits() bool {
 func (t *SpeedTracker) LimitedUserCount() int {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return len(t.buckets)
+	return t.limitedUsers
 }
