@@ -23,7 +23,7 @@ jobs:
           cache: true
 
       - name: Download pinned Xray core fork
-        run: go mod download github.com/xiaobaifafa/Xray-core
+        run: go mod download github.com/xtls/xray-core
 
       - name: Test Xray raw splice implementation
         run: go test -race github.com/xtls/xray-core/proxy -run 'TestCopyRawConnWithSplice' -count=1 -v
