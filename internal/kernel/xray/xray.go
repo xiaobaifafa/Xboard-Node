@@ -137,6 +137,17 @@ func (x *Xray) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls ker
 		return fmt.Errorf("create xray: %w", err)
 	}
 
+	// Configure limits before opening inbound listeners so the first client
+	// connection cannot slip through before device/speed metadata is installed.
+	x.mu.Lock()
+	speedLimitFunc := x.speedLimitFunc
+	x.mu.Unlock()
+	configureDispatcherLimits(ld, users)
+	if err := applyBandwidthLimits(inst, users, speedLimitFunc); err != nil {
+		inst.Close()
+		return fmt.Errorf("configure xray speed limits: %w", err)
+	}
+
 	// ── Phase 3: Start new (no lock, potentially slow) ──────────────────
 	if err := startWithTimeout(inst, startTimeout); err != nil {
 		inst.Close()
@@ -161,9 +172,6 @@ func (x *Xray) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls ker
 
 	// ── Phase 5: Recycle old (background, non-blocking) ─────────────────
 	closeOld(old, oldLD)
-
-	x.updateDispatcherLimits(users)
-	x.updateBandwidthLimits(users)
 
 	nlog.Core().Info("xray started",
 		"users", len(users),
@@ -878,49 +886,57 @@ func (x *Xray) aggregateStats() (map[int][2]int64, error) {
 
 // updateBandwidthLimits configures the patched xray-core bandwidth feature
 // with per-user speed limits in bytes per second.
+func applyBandwidthLimits(inst *xrayCore.Instance, users []model.UserSpec, fn func(string) *rate.Limiter) error {
+	if inst == nil {
+		return nil
+	}
+	feat := inst.GetFeature(featurebandwidth.ManagerType())
+	if feat == nil {
+		for _, user := range users {
+			if user.SpeedLimit > 0 {
+				return fmt.Errorf("bandwidth manager is unavailable")
+			}
+		}
+		return nil
+	}
+	bm, ok := feat.(featurebandwidth.Manager)
+	if !ok {
+		return fmt.Errorf("bandwidth feature has unexpected type %T", feat)
+	}
+	bm.Reset()
+	for _, user := range users {
+		email := userEmail(user.ID)
+		if fn != nil {
+			bm.SetUserLimiter(email, fn(user.UUID))
+			continue
+		}
+		bps := int64(user.SpeedLimit) * 1_000_000 / 8
+		bm.SetUserLimit(email, bps)
+	}
+	return nil
+}
+
 func (x *Xray) updateBandwidthLimits(users []model.UserSpec) {
 	x.mu.Lock()
 	inst := x.instance
 	fn := x.speedLimitFunc
 	currentUsers := x.users
 	x.mu.Unlock()
-	if inst == nil {
-		return
-	}
-	feat := inst.GetFeature(featurebandwidth.ManagerType())
-	if feat == nil {
-		return
-	}
-	bm, ok := feat.(featurebandwidth.Manager)
-	if !ok {
-		return
-	}
-	bm.Reset()
 	if users == nil {
 		users = currentUsers
 	}
-	for _, u := range users {
-		email := userEmail(u.ID)
-		if fn != nil {
-			bm.SetUserLimiter(email, fn(u.UUID))
-			continue
-		}
-		bps := int64(u.SpeedLimit) * 1_000_000 / 8
-		bm.SetUserLimit(email, bps)
+	if err := applyBandwidthLimits(inst, users, fn); err != nil {
+		nlog.Core().Error("xray: failed to update speed limits", "error", err)
 	}
 }
 
 // updateDispatcherLimits configures per-user device admission and records
 // which users need Vision's buffered path so the Xray bandwidth limiter cannot
 // be bypassed by raw TCP splice.
-func (x *Xray) updateDispatcherLimits(users []model.UserSpec) {
-	x.mu.Lock()
-	ld := x.limitDispatcher
-	x.mu.Unlock()
+func configureDispatcherLimits(ld *LimitDispatcher, users []model.UserSpec) {
 	if ld == nil {
 		return
 	}
-
 	emailToUID := make(map[string]int, len(users)*2)
 	deviceLimits := make(map[string]int)
 	speedLimits := make(map[string]int)
@@ -938,8 +954,14 @@ func (x *Xray) updateDispatcherLimits(users []model.UserSpec) {
 			speedLimits[u.UUID] = u.SpeedLimit
 		}
 	}
-
 	ld.UpdateLimits(emailToUID, deviceLimits, speedLimits)
+}
+
+func (x *Xray) updateDispatcherLimits(users []model.UserSpec) {
+	x.mu.Lock()
+	ld := x.limitDispatcher
+	x.mu.Unlock()
+	configureDispatcherLimits(ld, users)
 }
 
 // xrayCreationMu serialises xrayCore.New() + globalLimitDispatcher capture
