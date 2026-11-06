@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/cedar2025/xboard-node/internal/config"
+	"github.com/cedar2025/xboard-node/internal/limiter"
 	"github.com/cedar2025/xboard-node/internal/model"
 	appstats "github.com/xtls/xray-core/app/stats"
 	"github.com/xtls/xray-core/common/buf"
@@ -202,6 +203,59 @@ func TestXrayCapabilities(t *testing.T) {
 	}
 }
 
+
+func TestXraySpeedLimitUpdatesExistingSessionLimiter(t *testing.T) {
+	users := []model.UserSpec{
+		{ID: 1, UUID: "uuid-1", SpeedLimit: 0},
+		{ID: 2, UUID: "uuid-2", SpeedLimit: 0},
+	}
+	userLimiter := limiter.New()
+	userLimiter.UpdateUsers(users)
+	speedTracker := limiter.NewSpeedTracker(userLimiter)
+	speedTracker.UpdateBuckets()
+
+	inst := new(xrayCore.Instance)
+	bm := featurebandwidth.New()
+	if err := inst.AddFeature(bm); err != nil {
+		t.Fatalf("Instance.AddFeature(bandwidth) error = %v", err)
+	}
+
+	x := New(config.KernelConfig{Type: "xray"})
+	x.instance = inst
+	x.users = users
+	x.SetSpeedLimitFunc(speedTracker.GetLimiter)
+
+	// Xray must attach a stable limiter even while the user is unlimited.
+	liveLimiter := bm.GetUserLimiter(userEmail(1))
+	if liveLimiter == nil || liveLimiter.Limit() != rate.Inf {
+		t.Fatal("expected unlimited user to have an infinite-rate Xray limiter")
+	}
+
+	// Existing writers keep this pointer, so toggling the limit must update it.
+	updatedUsers := []model.UserSpec{
+		{ID: 1, UUID: "uuid-1", SpeedLimit: 4},
+		{ID: 2, UUID: "uuid-2", SpeedLimit: 0},
+	}
+	userLimiter.UpdateUsers(updatedUsers)
+	speedTracker.UpdateBuckets()
+	if bm.GetUserLimiter(userEmail(1)) != liveLimiter {
+		t.Fatal("Xray manager replaced the live limiter pointer")
+	}
+	if want := rate.Limit(4 * 1_000_000 / 8); liveLimiter.Limit() != want {
+		t.Fatalf("live rate after enabling limit = %v, want %v", liveLimiter.Limit(), want)
+	}
+
+	// Removing the limit must release existing connections without reconnecting.
+	unlimitedUsers := []model.UserSpec{
+		{ID: 1, UUID: "uuid-1", SpeedLimit: 0},
+		{ID: 2, UUID: "uuid-2", SpeedLimit: 0},
+	}
+	userLimiter.UpdateUsers(unlimitedUsers)
+	speedTracker.UpdateBuckets()
+	if liveLimiter.Limit() != rate.Inf {
+		t.Fatalf("live rate after removing limit = %v, want unlimited", liveLimiter.Limit())
+	}
+}
 
 func TestXrayUpdateBandwidthLimitsWritesPatchedCoreFeature(t *testing.T) {
 	inst := new(xrayCore.Instance)
