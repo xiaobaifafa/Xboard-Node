@@ -3,7 +3,6 @@ package xray
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
 	"testing"
 
 	"github.com/cedar2025/xboard-node/internal/config"
