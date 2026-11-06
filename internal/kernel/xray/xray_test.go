@@ -67,13 +67,9 @@ func TestXrayGetUserTrafficUsesBuiltInStatsAndDispatcherState(t *testing.T) {
 	email2 := userEmail(2)
 	ld.UpdateLimits(map[string]int{email1: 1, email2: 2}, nil, nil)
 	ld.mu.Lock()
-	ld.limitedIPs[email1] = map[string]int{"1.1.1.1": 1}
+	ld.activeIPs[email1] = map[string]int{"1.1.1.1": 1}
+	ld.activeIPs[email2] = map[string]int{"2.2.2.2": 1}
 	ld.mu.Unlock()
-	ref := &atomic.Int64{}
-	ref.Store(1)
-	ic := &ipCounter{}
-	ic.ips.Store("2.2.2.2", ref)
-	ld.unlimitedIPs.Store(email2, ic)
 	ld.connCount.Store(7)
 
 	x, mgr := newStatsBackedXray(t, users, ld)
