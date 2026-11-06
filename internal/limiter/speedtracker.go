@@ -93,7 +93,7 @@ func (t *SpeedTracker) UpdateBuckets() {
 
 	for id, lim := range t.buckets {
 		if _, ok := activeIDs[id]; !ok {
-			lim.SetLimit(rate.Inf)
+			lim.SetLimit(unlimitedRate)
 			lim.SetBurst(unlimitedBurst)
 			delete(t.buckets, id)
 		}
