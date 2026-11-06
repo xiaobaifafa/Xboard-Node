@@ -186,6 +186,46 @@ func TestLimitDispatcher_UnlimitedUserFastPath(t *testing.T) {
 }
 
 
+
+type interruptTestWriter struct {
+	buf.Writer
+	interrupted atomic.Bool
+}
+
+func (w *interruptTestWriter) Interrupt() {
+	w.interrupted.Store(true)
+}
+
+func TestLimitDispatcher_CloseUserConnectionsOnlyTargetsOneUser(t *testing.T) {
+	ld := newTestDispatcher()
+	user1 := userEmail(1)
+	user2 := userEmail(2)
+
+	writer1 := &interruptTestWriter{Writer: buf.Discard}
+	writer2 := &interruptTestWriter{Writer: buf.Discard}
+	link1 := &transport.Link{Reader: nopReader{}, Writer: writer1}
+	link2 := &transport.Link{Reader: nopReader{}, Writer: writer2}
+
+	ld.trackLink(link1, user1, "1.1.1.1", true)
+	ld.trackLink(link2, user2, "2.2.2.2", true)
+	ld.CloseUserConnections(user1)
+
+	if !writer1.interrupted.Load() {
+		t.Fatal("target user's writer was not interrupted")
+	}
+	if writer2.interrupted.Load() {
+		t.Fatal("another user's writer was interrupted")
+	}
+	if got := ld.connCount.Load(); got != 1 {
+		t.Fatalf("connCount = %d, want 1 after closing one user's session", got)
+	}
+
+	ld.CloseUserConnections(user1)
+	if writer2.interrupted.Load() {
+		t.Fatal("repeated close affected another user's writer")
+	}
+}
+
 func TestLimitDispatcher_TrackLinkPreservesReader(t *testing.T) {
 	ld := newTestDispatcher()
 	email := userEmail(1)
