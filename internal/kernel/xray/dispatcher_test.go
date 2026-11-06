@@ -10,8 +10,6 @@ import (
 
 	"github.com/cedar2025/xboard-node/internal/model"
 	"github.com/xtls/xray-core/common/buf"
-	"github.com/xtls/xray-core/common/protocol"
-	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/transport"
 	"golang.org/x/time/rate"
 )
