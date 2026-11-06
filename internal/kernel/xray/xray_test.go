@@ -213,6 +213,24 @@ func TestXrayCapabilities(t *testing.T) {
 }
 
 
+func TestNewlyLimitedUsersDetectsUnlimitedToLimitedTransitions(t *testing.T) {
+	oldUsers := []model.UserSpec{
+		{ID: 1, UUID: "u1", SpeedLimit: 0},
+		{ID: 2, UUID: "u2", SpeedLimit: 5},
+		{ID: 3, UUID: "u3", SpeedLimit: 0},
+	}
+	newUsers := []model.UserSpec{
+		{ID: 1, UUID: "u1", SpeedLimit: 8},
+		{ID: 2, UUID: "u2", SpeedLimit: 10},
+		{ID: 3, UUID: "u3", SpeedLimit: 0},
+		{ID: 4, UUID: "u4", SpeedLimit: 8},
+	}
+	got := newlyLimitedUsers(oldUsers, newUsers)
+	if len(got) != 1 || got[0].ID != 1 {
+		t.Fatalf("newlyLimitedUsers = %+v, want only existing user 1", got)
+	}
+}
+
 func TestXraySpeedLimitUpdatesExistingSessionLimiter(t *testing.T) {
 	users := []model.UserSpec{
 		{ID: 1, UUID: "uuid-1", SpeedLimit: 0},
