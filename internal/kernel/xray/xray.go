@@ -228,8 +228,8 @@ func tlsEqual(a, b kernel.TLSCert) bool {
 
 // GetUserTraffic returns per-user cumulative traffic from xray's built-in
 // stats pipeline and connection state from the admission dispatcher when
-// available. The dispatcher intentionally no longer wraps transport links,
-// so traffic accounting must come from xray-core itself.
+// available. Dispatcher wrappers are used only for connection lifecycle and
+// upload rate limiting; byte accounting remains in xray-core's stats pipeline.
 func (x *Xray) GetUserTraffic(_ context.Context) (traffic map[int][2]int64, aliveIPs map[int]map[string]bool, connCount int, err error) {
 	if !x.running.Load() {
 		return nil, nil, 0, nil
