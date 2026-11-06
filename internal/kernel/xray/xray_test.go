@@ -141,6 +141,15 @@ func TestXrayUpdateDispatcherLimitsPropagatesDeviceMetadata(t *testing.T) {
 	if _, ok := ld.deviceLimits[userEmail(9)]; ok {
 		t.Fatal("unexpected device limit entry for unlimited user")
 	}
+	if got := ld.speedLimits[userEmail(7)]; got != 12 {
+		t.Fatalf("speedLimits[email] = %d, want 12", got)
+	}
+	if got := ld.speedLimits["uuid-7"]; got != 12 {
+		t.Fatalf("speedLimits[uuid] = %d, want 12", got)
+	}
+	if _, ok := ld.speedLimits[userEmail(9)]; ok {
+		t.Fatal("unexpected speed limit entry for unlimited user")
+	}
 }
 
 func TestXraySetSpeedLimitFuncUsesPatchedCorePath(t *testing.T) {
