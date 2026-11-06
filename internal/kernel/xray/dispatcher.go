@@ -76,7 +76,7 @@ type LimitDispatcher struct {
 	mu           sync.RWMutex
 	activeIPs    map[string]map[string]int
 	deviceLimits map[string]int // email → max distinct active client IPs
-	speedLimits  map[string]int // email → configured Mbps; disables Vision splice when limited
+	speedLimits  map[string]int // email → configured Mbps
 	emailToUID   map[string]int // email → panel user ID
 
 	// activeWriters tracks the writable pipe endpoint for each user's sessions.
@@ -153,7 +153,6 @@ func (d *LimitDispatcher) identifyAndCheck(ctx context.Context) (email, sourceIP
 	if err := d.ensureSpeedLimiter(ctx, email); err != nil {
 		return "", "", err
 	}
-	d.enforceSpeedLimitPath(si)
 
 	if d.checkDeviceLimit(email, sourceIP) {
 		nlog.Core().Debug("xray: device limit exceeded", "email", email, "ip", sourceIP)
@@ -229,21 +228,6 @@ func (r *rateLimitReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
 		return nil, waitErr
 	}
 	return mb, err
-}
-
-// enforceSpeedLimitPath disables XTLS Vision raw TCP splice for capped users.
-// Splice copies bytes directly between sockets and bypasses the dispatcher
-// Writer chain where RateLimitWriter is installed.
-func (d *LimitDispatcher) enforceSpeedLimitPath(inbound *session.Inbound) {
-	if inbound == nil || inbound.User == nil || inbound.User.Email == "" {
-		return
-	}
-	d.mu.RLock()
-	speedLimited := d.speedLimits[inbound.User.Email] > 0
-	d.mu.RUnlock()
-	if speedLimited {
-		inbound.CanSpliceCopy = 3
-	}
 }
 
 // trackLink records connection lifecycle without mutating xray-core owned
