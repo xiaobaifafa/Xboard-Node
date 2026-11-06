@@ -177,6 +177,10 @@ func (x *Xray) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls ker
 // instance restart for most transport/TLS settings, it triggers a full restart
 // if any kernel-affecting fields (hash mismatch) have changed.
 func (x *Xray) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
+	x.mu.Lock()
+	newlyLimited := newlyLimitedUsers(x.users, users)
+	x.mu.Unlock()
+
 	x.updateDispatcherLimits(users)
 	x.updateBandwidthLimits(users)
 
@@ -187,6 +191,7 @@ func (x *Xray) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls ke
 	if same {
 		x.users = users
 		x.mu.Unlock()
+		x.closeNewlyLimitedUsers(newlyLimited)
 		nlog.Core().Debug("xray: limits updated, kernel configuration unchanged")
 		return nil
 	}
@@ -316,6 +321,48 @@ func (x *Xray) UpdateGlobalDevices(_ map[int][]string) {}
 // ClearGlobalDevices is a no-op for xray.
 func (x *Xray) ClearGlobalDevices() {}
 
+// newlyLimitedUsers returns existing users transitioning from unlimited to
+// limited. Their old Vision sessions may already be using raw TCP splice, so
+// those sessions must reconnect once to enter the buffered rate-limited path.
+func newlyLimitedUsers(oldUsers, newUsers []model.UserSpec) []model.UserSpec {
+	oldByID := make(map[int]model.UserSpec, len(oldUsers))
+	for _, user := range oldUsers {
+		oldByID[user.ID] = user
+	}
+	var newlyLimited []model.UserSpec
+	for _, user := range newUsers {
+		if old, ok := oldByID[user.ID]; ok && old.SpeedLimit <= 0 && user.SpeedLimit > 0 {
+			newlyLimited = append(newlyLimited, user)
+		}
+	}
+	return newlyLimited
+}
+
+// closeNewlyLimitedUsers closes existing sessions after a user gains a speed
+// cap. New sessions will be admitted with Vision splice disabled and the
+// shared limiter attached to both traffic directions.
+func (x *Xray) closeNewlyLimitedUsers(users []model.UserSpec) {
+	if len(users) == 0 {
+		return
+	}
+	x.mu.Lock()
+	ld := x.limitDispatcher
+	x.mu.Unlock()
+	if ld == nil {
+		return
+	}
+	for _, user := range users {
+		email := userEmail(user.ID)
+		matched := ld.CloseUserConnections(email)
+		nlog.Core().Info("xray: reconnecting user to apply speed limit",
+			"user_id", user.ID,
+			"user_uuid", user.UUID,
+			"email", email,
+			"matched_connections", matched,
+		)
+	}
+}
+
 // ─── User management (non-disruptive where possible) ────────────────────────
 
 // AddUsers adds new users to the running kernel via xray's UserManager API.
@@ -349,13 +396,15 @@ func (x *Xray) AddUsers(users []model.UserSpec) (int, error) {
 	for _, u := range userMap {
 		merged = append(merged, u)
 	}
+	newlyLimited := newlyLimitedUsers(x.users, merged)
 
 	if len(toAdd) == 0 {
 		// No new kernel users, but properties (limits) may have changed.
 		x.users = merged
 		x.mu.Unlock()
 		x.updateDispatcherLimits(merged)
-	x.updateBandwidthLimits(merged)
+		x.updateBandwidthLimits(merged)
+		x.closeNewlyLimitedUsers(newlyLimited)
 		return 0, nil
 	}
 
@@ -396,6 +445,7 @@ func (x *Xray) AddUsers(users []model.UserSpec) (int, error) {
 	x.mu.Unlock()
 	x.updateDispatcherLimits(merged)
 	x.updateBandwidthLimits(merged)
+	x.closeNewlyLimitedUsers(newlyLimited)
 
 	nlog.Core().Info("xray: users added via UserManager", "added", added, "total", len(merged))
 	return added, nil
@@ -491,6 +541,7 @@ func (x *Xray) UpdateUsers(users []model.UserSpec) (added, removed int, err erro
 		x.mu.Unlock()
 		return 0, 0, fmt.Errorf("not running")
 	}
+	newlyLimited := newlyLimitedUsers(x.users, users)
 	toAdd, toRemove := kernel.UserDiff(x.users, users)
 	added, removed = len(toAdd), len(toRemove)
 
@@ -500,6 +551,7 @@ func (x *Xray) UpdateUsers(users []model.UserSpec) (added, removed int, err erro
 		x.mu.Unlock()
 		x.updateDispatcherLimits(users)
 		x.updateBandwidthLimits(users)
+		x.closeNewlyLimitedUsers(newlyLimited)
 		nlog.Core().Info("xray: limits updated, kernel unchanged")
 		return 0, 0, nil
 	}
@@ -565,6 +617,7 @@ func (x *Xray) UpdateUsers(users []model.UserSpec) (added, removed int, err erro
 		"removed_users", len(toRemove),
 	)
 	x.closeRemovedUserConnections(toRemove)
+	x.closeNewlyLimitedUsers(newlyLimited)
 
 	nlog.Core().Info("xray: users updated via UserManager",
 		"added", added,
