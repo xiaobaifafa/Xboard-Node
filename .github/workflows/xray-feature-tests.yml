@@ -22,6 +22,9 @@ jobs:
           go-version: '1.25.7'
           cache: true
 
+      - name: Download pinned Xray core fork
+        run: go mod download github.com/xiaobaifafa/Xray-core
+
       - name: Run tests
         run: make test
 
