@@ -150,6 +150,9 @@ func (d *LimitDispatcher) identifyAndCheck(ctx context.Context) (email, sourceIP
 	email = si.User.Email
 	sourceIP = si.Source.Address.IP().String()
 
+	if err := d.ensureSpeedLimiter(ctx, email); err != nil {
+		return "", "", err
+	}
 	d.enforceSpeedLimitPath(si)
 
 	if d.checkDeviceLimit(email, sourceIP) {
@@ -157,6 +160,27 @@ func (d *LimitDispatcher) identifyAndCheck(ctx context.Context) (email, sourceIP
 		return "", "", errors.New("device limit exceeded for " + email)
 	}
 	return email, sourceIP, nil
+}
+
+// ensureSpeedLimiter fails closed if a configured speed cap has not yet
+// been installed in Xray's bandwidth manager. This prevents a hot-update
+// window from admitting an unthrottled connection.
+func (d *LimitDispatcher) ensureSpeedLimiter(ctx context.Context, email string) error {
+	d.mu.RLock()
+	speedLimited := d.speedLimits[email] > 0
+	d.mu.RUnlock()
+	if !speedLimited {
+		return nil
+	}
+	feat := xrayCore.MustFromContext(ctx).GetFeature(featurebandwidth.ManagerType())
+	if feat == nil {
+		return errors.New("xray bandwidth manager unavailable for speed-limited user " + email)
+	}
+	manager, ok := feat.(featurebandwidth.Manager)
+	if !ok || manager.GetUserLimiter(email) == nil {
+		return errors.New("xray user rate limiter unavailable for " + email)
+	}
+	return nil
 }
 
 // applyUploadSpeedLimit wraps the inbound reader on DispatchLink paths.
