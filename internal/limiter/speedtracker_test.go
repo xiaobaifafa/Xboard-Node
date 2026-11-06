@@ -150,6 +150,7 @@ func TestSpeedTracker_UpdateBuckets_RemovesUsers(t *testing.T) {
 	if st.GetLimiter("u1") == nil || st.GetLimiter("u2") == nil {
 		t.Fatal("expected buckets for both users")
 	}
+	removedLimiter := st.GetLimiter("u2")
 
 	// Remove user 2
 	users2 := []model.UserSpec{
@@ -163,6 +164,9 @@ func TestSpeedTracker_UpdateBuckets_RemovesUsers(t *testing.T) {
 	}
 	if st.GetLimiter("u2") != nil {
 		t.Error("expected no bucket for removed user 2")
+	}
+	if removedLimiter.Limit() != rate.Inf {
+		t.Errorf("removed user's existing limiter should be disabled, got %v", removedLimiter.Limit())
 	}
 }
 
