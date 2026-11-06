@@ -73,6 +73,7 @@ type LimitDispatcher struct {
 	mu           sync.RWMutex
 	activeIPs    map[string]map[string]int
 	deviceLimits map[string]int // email → max distinct active client IPs
+	speedLimits  map[string]int // email → configured Mbps; disables Vision splice when limited
 	emailToUID   map[string]int // email → panel user ID
 
 	// activeWriters tracks the writable pipe endpoint for each user's sessions.
@@ -136,6 +137,16 @@ func (d *LimitDispatcher) identifyAndCheck(ctx context.Context) (email, sourceIP
 	}
 	email = si.User.Email
 	sourceIP = si.Source.Address.IP().String()
+
+	// XTLS Vision can bypass dispatcher writers through raw TCP splice. When
+	// this user has a speed cap, force the buffered copy path so RateLimitWriter
+	// is actually used for the payload.
+	d.mu.RLock()
+	speedLimited := d.speedLimits[email] > 0
+	d.mu.RUnlock()
+	if speedLimited {
+		si.CanSpliceCopy = 3
+	}
 
 	if d.checkDeviceLimit(email, sourceIP) {
 		nlog.Core().Debug("xray: device limit exceeded", "email", email, "ip", sourceIP)
@@ -227,10 +238,11 @@ func (d *LimitDispatcher) Close() error {
 
 // ─── Limit management (called by Xray kernel) ──────────────────────────────
 
-func (d *LimitDispatcher) UpdateLimits(emailToUID map[string]int, deviceLimits, _ map[string]int) {
+func (d *LimitDispatcher) UpdateLimits(emailToUID map[string]int, deviceLimits, speedLimits map[string]int) {
 	d.mu.Lock()
 	d.emailToUID = emailToUID
 	d.deviceLimits = deviceLimits
+	d.speedLimits = speedLimits
 	d.mu.Unlock()
 
 }
