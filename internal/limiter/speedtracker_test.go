@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/cedar2025/xboard-node/internal/model"
+	"golang.org/x/time/rate"
 )
 
 func TestSpeedTracker_UpdateBuckets(t *testing.T) {
@@ -34,10 +35,17 @@ func TestSpeedTracker_UpdateBuckets(t *testing.T) {
 		t.Errorf("user 1 burst: got %v, want %v", b1.Burst(), expectedBurst)
 	}
 
-	// User 2: no speed limit, no bucket
+	// User 2: unlimited, but must still have a stable limiter so Xray can
+	// apply a newly-added limit to connections that are already established.
 	b2 := st.GetLimiter("u2")
-	if b2 != nil {
-		t.Fatal("expected no bucket for user 2")
+	if b2 == nil {
+		t.Fatal("expected an infinite-rate bucket for unlimited user 2")
+	}
+	if b2.Limit() != rate.Inf {
+		t.Fatalf("user 2 rate = %v, want unlimited", b2.Limit())
+	}
+	if st.LimitedUserCount() != 2 || !st.HasLimits() {
+		t.Fatalf("limited users = %d, hasLimits = %v; want 2, true", st.LimitedUserCount(), st.HasLimits())
 	}
 
 	// User 3: 10 Mbps = 1250000 bytes/sec
@@ -90,6 +98,41 @@ func TestSpeedTracker_UpdateBuckets_PreservesExisting(t *testing.T) {
 	expectedRate := float64(5 * 1000000 / 8)
 	if float64(b1After.Limit()) != expectedRate {
 		t.Errorf("user 1 updated rate: got %v, want %v", float64(b1After.Limit()), expectedRate)
+	}
+}
+
+func TestSpeedTracker_UpdatesExistingLimiterWhenLimitToggled(t *testing.T) {
+	l := New()
+	st := NewSpeedTracker(l)
+
+	l.UpdateUsers([]model.UserSpec{{ID: 1, UUID: "u1", SpeedLimit: 0}})
+	st.UpdateBuckets()
+	lim := st.GetLimiter("u1")
+	if lim == nil || lim.Limit() != rate.Inf {
+		t.Fatal("expected initial unlimited limiter")
+	}
+
+	// Enabling a limit must update the same pointer used by existing Xray writers.
+	l.UpdateUsers([]model.UserSpec{{ID: 1, UUID: "u1", SpeedLimit: 4}})
+	st.UpdateBuckets()
+	if got := st.GetLimiter("u1"); got != lim {
+		t.Fatal("limiter pointer changed when enabling limit")
+	}
+	if want := rate.Limit(4 * 1_000_000 / 8); lim.Limit() != want {
+		t.Fatalf("enabled rate = %v, want %v", lim.Limit(), want)
+	}
+
+	// Removing the limit must release existing sessions too.
+	l.UpdateUsers([]model.UserSpec{{ID: 1, UUID: "u1", SpeedLimit: 0}})
+	st.UpdateBuckets()
+	if got := st.GetLimiter("u1"); got != lim {
+		t.Fatal("limiter pointer changed when removing limit")
+	}
+	if lim.Limit() != rate.Inf {
+		t.Fatalf("removed limit left old rate %v", lim.Limit())
+	}
+	if st.HasLimits() || st.LimitedUserCount() != 0 {
+		t.Fatalf("expected no active limits, got hasLimits=%v count=%d", st.HasLimits(), st.LimitedUserCount())
 	}
 }
 
