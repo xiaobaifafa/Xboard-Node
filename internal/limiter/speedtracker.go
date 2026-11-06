@@ -72,15 +72,17 @@ func (t *SpeedTracker) UpdateBuckets() {
 			continue
 		}
 
-		lim := t.buckets[user.ID]
-		if lim == nil {
-			lim = rate.NewLimiter(rate.Limit(0), 0)
-			t.buckets[user.ID] = lim
-		}
 		bytesPerSec := int(user.SpeedLimit) * 1_000_000 / 8
 		burst := bytesPerSec
 		if burst < 64*1024 {
 			burst = 64 * 1024
+		}
+		lim := t.buckets[user.ID]
+		if lim == nil {
+			// Start with a full burst, matching rate.Limiter's normal initial
+			// token balance instead of making the first request wait to refill.
+			t.buckets[user.ID] = rate.NewLimiter(rate.Limit(bytesPerSec), burst)
+			continue
 		}
 		lim.SetLimit(rate.Limit(bytesPerSec))
 		lim.SetBurst(burst)
