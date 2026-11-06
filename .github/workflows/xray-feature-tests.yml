@@ -28,7 +28,7 @@ jobs:
           grep -i 'xray-core' go.sum
 
       - name: Test Xray raw splice implementation
-        run: go test -race github.com/xtls/xray-core/proxy -run 'TestCopyRawConnWithSplice' -count=1 -v
+        run: go test -race github.com/xtls/xray-core/proxy -count=1
 
       - name: Run tests
         run: make test
