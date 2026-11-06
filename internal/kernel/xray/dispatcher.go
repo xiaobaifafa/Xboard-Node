@@ -111,14 +111,17 @@ func (d *LimitDispatcher) DispatchLink(ctx context.Context, dest net.Destination
 		return err
 	}
 
-	if err := d.innerDisp.DispatchLink(ctx, dest, link); err != nil {
-		if email != "" {
-			d.delConn(email, sourceIP)
-		}
-		return err
-	}
+	// Wrap before delegation because the inner dispatcher may start consuming
+	// the link immediately. If delegation fails, close the wrapper to release
+	// the IP refcount and the underlying writer.
 	if email != "" {
 		d.trackLink(link, email, sourceIP)
+	}
+	if err := d.innerDisp.DispatchLink(ctx, dest, link); err != nil {
+		if email != "" {
+			_ = common.Close(link.Writer)
+		}
+		return err
 	}
 	return nil
 }
