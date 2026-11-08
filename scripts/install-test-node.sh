@@ -10,8 +10,7 @@ TOKEN=""
 NODE_ID=""
 KERNEL="xray"
 
-RELEASE_VERSION="v1"
-RELEASE_BASE="https://github.com/xiaobaifafa/Xboard-Node/releases/download/${RELEASE_VERSION}"
+RELEASE_BASE="https://github.com/xiaobaifafa/Xboard-Node/releases/download/v1"
 
 BIN="/usr/local/bin/xboard-node"
 XBCTL="/usr/local/bin/xbctl"
@@ -81,7 +80,7 @@ cleanup() { rm -rf "$TMP_DIR"; }
 trap cleanup EXIT
 
 log "检测到 CPU 架构：$ARCH"
-log "从 GitHub Release ${RELEASE_VERSION} 下载程序"
+log "从 GitHub Release v1 下载程序"
 curl -fL --retry 5 --retry-all-errors --retry-delay 2 \
   "$RELEASE_BASE/xboard-node-linux-$ARCH" -o "$TMP_DIR/xboard-node"
 curl -fL --retry 5 --retry-all-errors --retry-delay 2 \
