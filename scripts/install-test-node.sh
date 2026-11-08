@@ -12,7 +12,7 @@ TOKEN=""
 NODE_ID=""
 KERNEL="xray"
 
-RELEASE_BASE="https://github.com/xiaobaifafa/Xboard-Node-Install/releases/download/install"
+RELEASE_BASE="https://github.com/xiaobaifafa/Xboard-Node/releases/download/optimized-v1"
 
 BIN="/usr/local/bin/xboard-node"
 XBCTL="/usr/local/bin/xbctl"
