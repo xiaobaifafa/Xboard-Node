@@ -47,7 +47,7 @@ curl -fsSL https://raw.githubusercontent.com/cedar2025/xboard-node/dev/install.s
 
 ### One-command installer for this fork (Release v1)
 
-This fork provides a one-command installer for the prebuilt Linux binaries in the pinned [GitHub Release v1](https://github.com/xiaobaifafa/Xboard-Node/releases/tag/v1). It automatically detects the CPU architecture, downloads the matching \`xboard-node\` and \`xbctl\` binaries, verifies both files with SHA256, installs them, creates the node configuration, and registers the \`xboard-node\` systemd service. The installer URL is stable: do not add a script-version query such as ?v=....
+This fork provides a one-command installer for the prebuilt Linux binaries in the pinned [GitHub Release optimized-v1](https://github.com/xiaobaifafa/Xboard-Node/releases/tag/optimized-v1). It automatically detects the CPU architecture, downloads the matching \`xboard-node\` and \`xbctl\` binaries, verifies both files with SHA256, installs them, creates the node configuration, and registers the \`xboard-node\` systemd service. The installer URL is stable: do not add a script-version query such as ?v=....
 
 **Supported systems:** Linux with systemd on \`amd64\` / \`x86_64\` or \`arm64\` / \`aarch64\`.
 
