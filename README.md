@@ -47,7 +47,7 @@ curl -fsSL https://raw.githubusercontent.com/cedar2025/xboard-node/dev/install.s
 
 ### One-command installer for this fork (Release v1)
 
-This fork provides a one-command installer for the prebuilt Linux binaries in [GitHub Release v1](https://github.com/xiaobaifafa/Xboard-Node/releases/tag/v1). It automatically detects the CPU architecture, downloads the matching \`xboard-node\` and \`xbctl\` binaries, verifies both files with SHA256, installs them, creates the node configuration, and registers the \`xboard-node\` systemd service.
+This fork provides a one-command installer for the prebuilt Linux binaries in the pinned [GitHub Release v1](https://github.com/xiaobaifafa/Xboard-Node/releases/tag/v1). It automatically detects the CPU architecture, downloads the matching \`xboard-node\` and \`xbctl\` binaries, verifies both files with SHA256, installs them, creates the node configuration, and registers the \`xboard-node\` systemd service. The installer URL is stable: do not add a script-version query such as ?v=....
 
 **Supported systems:** Linux with systemd on \`amd64\` / \`x86_64\` or \`arm64\` / \`aarch64\`.
 
@@ -95,7 +95,7 @@ A running systemd process alone does not prove that the node is connected to the
 
 #### 5. Upgrade or reinstall
 
-Run the same installation command again to download and install the binaries pinned to Release \`v1\`, regenerate the node configuration, and restart the service. Back up \`/etc/xboard-node/config.yml\` and \`/etc/xboard-node/node.env\` first if you need to preserve an existing configuration.
+Run the same installation command again to download and install the binaries pinned to Release \`v1\`, regenerate the node configuration, and restart the service. Back up \`/etc/xboard-node/config.yml\` and \`/etc/xboard-node/node.env\` first if you need to preserve an existing configuration. When publishing a newer node release, maintainers only need to update \`RELEASE_BASE\` and the four architecture-specific SHA256 values in \`scripts/install-test-node.sh\`; the user-facing installation command stays unchanged.
 
 #### Installer options
 
