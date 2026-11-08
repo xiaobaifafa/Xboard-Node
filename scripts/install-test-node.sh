@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# One-command installer for Xboard-Node binaries published in GitHub Release v1.
+# One-command installer for Xboard-Node binaries published in a pinned GitHub Release.
 # Supports Linux x86_64/amd64 and aarch64/arm64.
+# To publish a newer node build, update RELEASE_BASE and the four SHA256 values below.
+# Keep this script's raw.githubusercontent.com URL stable; users should not need a version query.
 
 MODE=""
 PANEL_URL=""
